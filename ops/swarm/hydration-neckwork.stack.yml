@@ -31,7 +31,7 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - neckwork
+      - net
     logging:
       driver: json-file
     deploy:
@@ -56,14 +56,13 @@ services:
   schema-bootstrap:
     image: galacticcouncil/hydration-neckwork-api:latest
     command: ["./node_modules/.bin/tsx", "src/db/schemaBootstrap.ts", "--apply"]
-    volumes:
-      - /opt/hydration-neckwork/clickhouse/schema:/schema:ro
     environment:
+      # Baked into the api image; see api/Dockerfile.
       SCHEMA_DIR: /schema
       CLICKHOUSE_HOST: http://clickhouse:8123
       CLICKHOUSE_PASSWORD: change-me-before-first-deploy
     networks:
-      - neckwork
+      - net
     logging:
       driver: json-file
     deploy:
@@ -103,7 +102,7 @@ services:
       RAW_ASSET_SNAPSHOT_INTERVAL: "1000"
       RAW_PIPELINE_ID: raw-live
     networks:
-      - neckwork
+      - net
     logging:
       driver: json-file
     deploy:
@@ -161,12 +160,12 @@ services:
       LIVE_MAIN_CAPACITY: "20"
       LIVE_MAIN_BATCH_SIZE: "50000"
     volumes:
+      # Node-local by necessity: this is how the supervisor creates workers, and
+      # the reason the whole stack is pinned to one node. The worker definitions
+      # themselves are baked into the image (ops/supervisor.Dockerfile).
       - /var/run/docker.sock:/var/run/docker.sock
-      # Worker service definitions, image-only so `docker compose run` never
-      # tries to build inside the supervisor.
-      - /opt/hydration-neckwork/ops/swarm/workers.compose.yml:/etc/hydration-neckwork/docker-compose.yml:ro
     networks:
-      - neckwork
+      - net
     logging:
       driver: json-file
     deploy:
@@ -187,7 +186,7 @@ services:
       RPC_RATE_LIMIT: "20"
       RPC_CAPACITY: "5"
     networks:
-      - neckwork
+      - net
     logging:
       driver: json-file
     deploy:
@@ -211,10 +210,10 @@ services:
       CLICKHOUSE_HOST: clickhouse
       CLICKHOUSE_PASSWORD: change-me-before-first-deploy
     volumes:
-      - /opt/hydration-neckwork/ops/backup-user-tables.sh:/backup-user-tables.sh:ro
+      # The script itself is baked into the clickhouse image.
       - user_backups:/backups
     networks:
-      - neckwork
+      - net
     logging:
       driver: json-file
     deploy:
@@ -235,7 +234,7 @@ services:
       RPC_RATE_LIMIT: "20"
       RPC_CAPACITY: "4"
     networks:
-      - neckwork
+      - net
     logging:
       driver: json-file
     deploy:
@@ -258,7 +257,7 @@ services:
       CLICKHOUSE_PASSWORD: change-me-before-first-deploy
       SUBSQUARE_BASE_URL: https://hydration.subsquare.io
     networks:
-      - neckwork
+      - net
     logging:
       driver: json-file
     deploy:
@@ -283,7 +282,7 @@ services:
       RPC_RATE_LIMIT: "20"
       RPC_CAPACITY: "5"
     networks:
-      - neckwork
+      - net
     logging:
       driver: json-file
     deploy:
@@ -313,7 +312,7 @@ services:
       RAW_MONEY_MARKET_BATCH_SIZE: "50"
       RAW_MONEY_MARKET_ETH_CALL_TIMEOUT_MS: "20000"
     networks:
-      - neckwork
+      - net
     logging:
       driver: json-file
     deploy:
@@ -341,7 +340,7 @@ services:
       RAW_MONEY_MARKET_BATCH_SIZE: "50"
       RAW_MONEY_MARKET_ETH_CALL_TIMEOUT_MS: "20000"
     networks:
-      - neckwork
+      - net
     logging:
       driver: json-file
     deploy:
@@ -365,7 +364,7 @@ services:
       CLICKHOUSE_HOST: http://clickhouse:8123
       CLICKHOUSE_PASSWORD: change-me-before-first-deploy
     networks:
-      - neckwork
+      - net
     logging:
       driver: json-file
     deploy:
@@ -389,7 +388,7 @@ services:
       EXPLORER_OCELLOIDS_URL: https://api.ocelloids.net
       EXPLORER_OCELLOIDS_TOKEN: ""
     networks:
-      - neckwork
+      - net
       - gateway
     logging:
       driver: json-file
@@ -425,7 +424,7 @@ services:
       EXPLORER_OCELLOIDS_URL: https://api.ocelloids.net
       EXPLORER_OCELLOIDS_TOKEN: ""
     networks:
-      - neckwork
+      - net
     logging:
       driver: json-file
     deploy:
@@ -448,7 +447,7 @@ services:
     environment:
       EXPLORER_URL: https://neckwork-explorer.shellfish.hydration.cloud
     networks:
-      - neckwork
+      - net
       - gateway
     logging:
       driver: json-file
@@ -477,7 +476,7 @@ services:
     environment:
       PREIS_URL: https://neckwork-preis.shellfish.hydration.cloud
     networks:
-      - neckwork
+      - net
       - gateway
     logging:
       driver: json-file
@@ -501,20 +500,23 @@ services:
         traefik.http.routers.neckwork-explorer.tls.certresolver: myresolver
         traefik.http.services.neckwork-explorer.loadbalancer.server.port: "80"
 
+# Stack-managed, so deploying creates them and nothing has to exist beforehand.
+# They are namespaced with the stack (`neckwork_clickhouse_data`). `docker stack
+# rm` removes services, networks, and configs but never volumes, so the indexed
+# database survives a teardown and redeploy.
 volumes:
   clickhouse_data:
-    external: true
-    name: hydration-neckwork-clickhouse-data
   user_backups:
-    external: true
-    name: hydration-neckwork-user-backups
 
 networks:
   # Attachable so the supervisor's `docker compose run` workers, which are plain
-  # containers rather than Swarm tasks, can still reach ClickHouse. Declared
-  # external and precreated so the name never depends on the stack name.
-  neckwork:
-    external: true
-    name: hydration-neckwork-net
+  # containers rather than Swarm tasks, can still join it to reach ClickHouse.
+  # Stack-managed, so the real name is `<stack>_net` — deploy the stack as
+  # `neckwork` and it becomes `neckwork_net`, which is what workers.compose.yml
+  # expects.
+  net:
+    driver: overlay
+    attachable: true
+  # Traefik's own network, created outside any stack and shared with it.
   gateway:
     external: true

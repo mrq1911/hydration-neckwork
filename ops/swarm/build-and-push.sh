@@ -24,14 +24,16 @@ image() {
   printf '%s/%s-%s:%s' "$REGISTRY" "$PREFIX" "$1" "$TAG"
 }
 
+# clickhouse and api build from the repository root so the schema and the backup
+# script are baked in; see their Dockerfile.dockerignore files.
 log "building $(image clickhouse)"
-docker build -t "$(image clickhouse)" ./clickhouse
+docker build -t "$(image clickhouse)" -f clickhouse/Dockerfile .
 
 log "building $(image indexer)"
 docker build -t "$(image indexer)" .
 
 log "building $(image api)"
-docker build -t "$(image api)" ./api
+docker build -t "$(image api)" -f api/Dockerfile .
 
 log "building $(image supervisor)"
 docker build -t "$(image supervisor)" -f ops/supervisor.Dockerfile .

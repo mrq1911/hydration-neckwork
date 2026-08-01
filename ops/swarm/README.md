@@ -22,18 +22,25 @@ docker-compose.yml                    hydration-neckwork.stack.yml
 ├─ container_name: ─────────────────▶ dropped; Swarm names tasks itself
 ├─ profiles: [worker] ──────────────▶ moved to workers.compose.yml
 ├─ depends_on: condition: … ────────▶ dropped; restart policies converge instead
-├─ driver: bridge ──────────────────▶ external attachable overlay
+├─ driver: bridge ──────────────────▶ stack-managed attachable overlay
 ├─ ports: 127.0.0.1:… ──────────────▶ traefik labels under deploy.labels
 └─ (no deploy: blocks) ─────────────▶ placement, resources, restart_policy
 ```
 
-Two source changes were needed as well, both of which keep working under plain
-Compose:
+Source changes were needed as well, all of which keep working under plain Compose:
 
 - `scripts/ingestion-supervisor.sh` queries ClickHouse over HTTP instead of
   `docker compose exec clickhouse`. Under Swarm the database is not a service in
   the supervisor's Compose project, so the old call could never resolve it.
-- `ops/supervisor.Dockerfile` installs `curl` for that query path.
+- `ops/supervisor.Dockerfile` installs `curl` for that query path, and bakes in
+  `workers.compose.yml` rather than the repository's `docker-compose.yml`.
+- `api/Dockerfile` and `clickhouse/Dockerfile` build from the repository root and
+  bake in the ClickHouse schema and the backup script. Each has its own
+  `Dockerfile.dockerignore`, because the root `.dockerignore` excludes `api`.
+
+Together those remove every host bind mount except the Docker socket, which is
+what makes the stack deployable and manageable with no shell access to the node:
+nothing has to be placed on it, and nothing drifts out of sync with the images.
 
 ## Who runs what
 
@@ -43,23 +50,17 @@ Three roles, which may or may not be the same machine:
 build machine (Docker Hub push rights for galacticcouncil)
   └─▶ ops/swarm/build-and-push.sh          → 6 images in the registry
 
-swarm node (Ubuntu-2204-jammy-amd64-base)
-  ├─▶ docker network create …              → hydration-neckwork-net
-  ├─▶ docker volume create …               → clickhouse-data, user-backups
-  └─▶ git clone -b swarm-deploy …          → /opt/hydration-neckwork
-
 anywhere with cluster access
   └─▶ docker stack deploy … / Swarmpit     → stack `neckwork`
 ```
 
-Only the checkout and the bind-mounted paths have to be on the node itself. The
-stack can be deployed from any machine that can reach the cluster, including the
-Swarmpit UI.
+Nothing has to be done on the node itself. The stack creates its own network and
+volumes, and every file the services need is inside an image, so the deploy can be
+driven entirely from the Swarmpit UI.
 
 ## Prerequisites
 
-The stack references external volumes, an external network, and registry images.
-It will not converge until all of them exist.
+Only two, and only the first involves the cluster at all.
 
 1. **Images.** From a machine with Docker Hub push rights for `galacticcouncil`:
 
@@ -71,48 +72,24 @@ It will not converge until all of them exist.
    deployment-specific values: the UIs read their sibling's URL from `/config.js`
    at container start, so the same image works for any hostname.
 
-2. **Network.** Attachable, so the supervisor's plain-container workers can join
-   the same overlay as the Swarm services:
+2. **Set the ClickHouse password.** Replace every
+   `change-me-before-first-deploy` in the stack file before the first deploy — 14
+   occurrences, and they all have to match. The ClickHouse entrypoint only applies
+   `CLICKHOUSE_PASSWORD` when it initializes an empty volume, so changing it
+   afterwards means updating the `default` user by hand. ClickHouse publishes no
+   ports; it is reachable only on the stack's overlay network.
 
-   ```bash
-   docker network create --driver overlay --attachable hydration-neckwork-net
-   ```
+The network and both volumes are stack-managed, so deploying creates them. The
+volumes are namespaced with the stack (`neckwork_clickhouse_data`), and `docker
+stack rm` never removes volumes, so the indexed database survives a teardown.
 
-3. **Volumes.** Declared external so a `docker stack rm` cannot take the indexed
-   database with it:
-
-   ```bash
-   docker volume create hydration-neckwork-clickhouse-data
-   docker volume create hydration-neckwork-user-backups
-   ```
-
-4. **Repository checkout on the node** at `/opt/hydration-neckwork`. Three bind
-   mounts read from it: the ClickHouse schema for `schema-bootstrap`, the backup
-   script for `user-backup`, and `workers.compose.yml` for the supervisor. The
-   schema is not baked into the API image, so this is not optional.
-
-   It has to be a checkout that contains this directory. Upstream `main` does not
-   have `ops/swarm/`, so cloning it leaves the supervisor without its worker
-   definitions and no historical ingestion will start:
-
-   ```bash
-   git clone -b swarm-deploy \
-     https://github.com/mrq1911/hydration-neckwork /opt/hydration-neckwork
-   ```
-
-   Keep it at the same commit as the pushed images; the schema files travel with
-   the checkout, not the image.
-
-5. **Set the ClickHouse password.** Replace every
-   `change-me-before-first-deploy` in the stack file before the first deploy.
-   The ClickHouse entrypoint only applies `CLICKHOUSE_PASSWORD` when it
-   initializes an empty volume, so changing it afterwards means updating the
-   `default` user by hand. ClickHouse publishes no ports; it is reachable only on
-   the overlay network.
+Deploy the stack as **`neckwork`**. The overlay network becomes `neckwork_net`,
+which is the name baked into `workers.compose.yml`; under a different stack name
+the supervisor's workers cannot resolve ClickHouse.
 
 ## Deploy
 
-From the CLI, against the checkout:
+From the CLI, against a checkout:
 
 ```bash
 docker stack deploy -c ops/swarm/hydration-neckwork.stack.yml neckwork
@@ -239,7 +216,7 @@ out the previous deployment's URL.
 
 ## Operational notes
 
-- Back up `hydration-neckwork-clickhouse-data` before any schema or checkpoint
+- Back up `neckwork_clickhouse_data` before any schema or checkpoint
   maintenance. The `user_*` tables are the only state not reproducible from raw
   chain data, and `user-backup` exports them nightly.
 - Rolling a new image is `docker service update --image … --force` per service,

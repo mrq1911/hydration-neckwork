@@ -3,8 +3,8 @@ name: hydration-neckwork
 services:
   clickhouse:
     build:
-      context: ./clickhouse
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: clickhouse/Dockerfile
     container_name: hydration-neckwork-clickhouse
     ports:
       - "127.0.0.1:18123:8123"
@@ -29,15 +29,14 @@ services:
   # empty/partial schema.
   schema-bootstrap:
     build:
-      context: ./api
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: api/Dockerfile
     image: hydration-neckwork-api
     container_name: hydration-neckwork-schema-bootstrap
     restart: "no"
     command: ["./node_modules/.bin/tsx", "src/db/schemaBootstrap.ts", "--apply"]
-    volumes:
-      - ./clickhouse/schema:/schema:ro
     environment:
+      # Baked into the api image; see api/Dockerfile.
       - SCHEMA_DIR=/schema
       - CLICKHOUSE_HOST=http://clickhouse:8123
       - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:-dev}
@@ -180,12 +179,14 @@ services:
   # server. See ops/backup-user-tables.sh for the export/retention/restore
   # procedure.
   user-backup:
-    build: ./clickhouse
+    build:
+      context: .
+      dockerfile: clickhouse/Dockerfile
     container_name: hydration-neckwork-user-backup
     restart: unless-stopped
     entrypoint: ["/bin/sh", "/backup-user-tables.sh"]
     volumes:
-      - ./ops/backup-user-tables.sh:/backup-user-tables.sh:ro
+      # The script itself is baked into the clickhouse image.
       - user_backups:/backups
     environment:
       - CLICKHOUSE_HOST=clickhouse
@@ -401,8 +402,8 @@ services:
 
   api:
     build:
-      context: ./api
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: api/Dockerfile
     container_name: hydration-neckwork-api
     restart: unless-stopped
     depends_on:
@@ -428,8 +429,8 @@ services:
   # other schema consumer.
   derivations:
     build:
-      context: ./api
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: api/Dockerfile
     image: hydration-neckwork-api
     container_name: hydration-neckwork-derivations
     restart: unless-stopped

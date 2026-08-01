@@ -59,6 +59,9 @@ services:
       - neckwork
 
 networks:
+  # The stack's own overlay, which Swarm namespaces with the stack name. Deploying
+  # the stack as anything other than `neckwork` means changing this to match, or
+  # the workers come up unable to resolve ClickHouse.
   neckwork:
     external: true
-    name: hydration-neckwork-net
+    name: neckwork_net
