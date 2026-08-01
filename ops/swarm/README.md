@@ -35,6 +35,27 @@ Compose:
   the supervisor's Compose project, so the old call could never resolve it.
 - `ops/supervisor.Dockerfile` installs `curl` for that query path.
 
+## Who runs what
+
+Three roles, which may or may not be the same machine:
+
+```
+build machine (Docker Hub push rights for galacticcouncil)
+  └─▶ ops/swarm/build-and-push.sh          → 6 images in the registry
+
+swarm node (Ubuntu-2204-jammy-amd64-base)
+  ├─▶ docker network create …              → hydration-neckwork-net
+  ├─▶ docker volume create …               → clickhouse-data, user-backups
+  └─▶ git clone -b swarm-deploy …          → /opt/hydration-neckwork
+
+anywhere with cluster access
+  └─▶ docker stack deploy … / Swarmpit     → stack `neckwork`
+```
+
+Only the checkout and the bind-mounted paths have to be on the node itself. The
+stack can be deployed from any machine that can reach the cluster, including the
+Swarmpit UI.
+
 ## Prerequisites
 
 The stack references external volumes, an external network, and registry images.
@@ -70,8 +91,13 @@ It will not converge until all of them exist.
    script for `user-backup`, and `workers.compose.yml` for the supervisor. The
    schema is not baked into the API image, so this is not optional.
 
+   It has to be a checkout that contains this directory. Upstream `main` does not
+   have `ops/swarm/`, so cloning it leaves the supervisor without its worker
+   definitions and no historical ingestion will start:
+
    ```bash
-   git clone https://github.com/1xGiraffe/hydration-neckwork /opt/hydration-neckwork
+   git clone -b swarm-deploy \
+     https://github.com/mrq1911/hydration-neckwork /opt/hydration-neckwork
    ```
 
    Keep it at the same commit as the pushed images; the schema files travel with
