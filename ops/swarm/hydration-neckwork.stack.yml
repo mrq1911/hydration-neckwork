@@ -1,0 +1,516 @@
+# Docker Swarm stack for Hydration Neckwork, pinned to a single node.
+#
+# This is not a drop-in translation of docker-compose.yml. Swarm cannot build
+# images, ignores `depends_on`, and does not support `container_name` or
+# `profiles`, so this file carries prebuilt images, explicit placement, and
+# restart policies instead. See ops/swarm/README.md for the prerequisites; the
+# stack will not converge without them.
+#
+# Every service is pinned to one node because ClickHouse stores its data in a
+# local volume and `ingestion-supervisor` drives that node's Docker engine
+# directly. Moving a task to another node would hand it an empty database.
+#
+# The `indexer` and `raw-indexer` services from docker-compose.yml are absent on
+# purpose. They are templates the supervisor instantiates as plain containers
+# (ops/swarm/workers.compose.yml), never long-running replicas of their own.
+
+version: "3.8"
+
+services:
+  clickhouse:
+    image: galacticcouncil/hydration-neckwork-clickhouse:latest
+    environment:
+      CLICKHOUSE_DB: price_data
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+      CLICKHOUSE_PASSWORD: change-me-before-first-deploy
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD-SHELL", "clickhouse-client --password \"$$CLICKHOUSE_PASSWORD\" --query 'SELECT 1'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - neckwork
+    logging:
+      driver: json-file
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == Ubuntu-2204-jammy-amd64-base
+      restart_policy:
+        condition: any
+      resources:
+        limits:
+          cpus: "16"
+          memory: 64G
+        reservations:
+          cpus: "4"
+          memory: 8G
+
+  # One-shot schema migration. Swarm ignores `depends_on`, so this cannot gate
+  # the services that need the schema; `on-failure` makes it retry until
+  # ClickHouse answers, then stay completed at 0/1 replicas. Schema consumers
+  # crash-loop until it succeeds, which is how they converge without a gate.
+  schema-bootstrap:
+    image: galacticcouncil/hydration-neckwork-api:latest
+    command: ["./node_modules/.bin/tsx", "src/db/schemaBootstrap.ts", "--apply"]
+    volumes:
+      - /opt/hydration-neckwork/clickhouse/schema:/schema:ro
+    environment:
+      SCHEMA_DIR: /schema
+      CLICKHOUSE_HOST: http://clickhouse:8123
+      CLICKHOUSE_PASSWORD: change-me-before-first-deploy
+    networks:
+      - neckwork
+    logging:
+      driver: json-file
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == Ubuntu-2204-jammy-amd64-base
+      restart_policy:
+        condition: on-failure
+        delay: 15s
+
+  raw-live:
+    image: galacticcouncil/hydration-neckwork-indexer:latest
+    command: ["src/raw/cli.ts", "--pipeline-id=raw-live"]
+    environment:
+      RPC_URL: https://hydration-rpc.neckwork.net
+      SQD_GATEWAY: https://v2.archive.subsquid.io/network/hydradx
+      SQD_GATEWAY_API_KEY: ""
+      RAW_EVM_RPC_URL: https://hydration-rpc.neckwork.net
+      RAW_EVM_RPC_FALLBACK_URLS: https://rpc.sin.hydration.cloud,https://rpc.coke.hydration.cloud,https://hydration.rotko.net,https://hydration-rpc.neckwork.net
+      CLICKHOUSE_HOST: http://clickhouse:8123
+      CLICKHOUSE_PASSWORD: change-me-before-first-deploy
+      RPC_RATE_LIMIT: "50"
+      RPC_CAPACITY: "10"
+      RAW_BALANCE_READ_CONCURRENCY: "20"
+      RAW_BALANCE_READ_BATCH_ENABLED: "true"
+      RAW_BALANCE_READ_BATCH_SIZE: "250"
+      RAW_BALANCE_READ_BATCH_CONCURRENCY: "4"
+      RAW_SNAPSHOT_READ_BATCH_SIZE: "100"
+      RAW_SNAPSHOT_READ_BATCH_CONCURRENCY: "2"
+      RAW_MONEY_MARKET_ETH_CALL_TIMEOUT_MS: "20000"
+      RAW_MONEY_MARKET_POSITION_CONCURRENCY: "8"
+      RAW_MONEY_MARKET_BATCH_SIZE: "50"
+      RAW_MM_PERIODIC_SNAPSHOT_ENABLED: "true"
+      RAW_MM_SNAPSHOT_INTERVAL_BLOCKS: "7200"
+      BATCH_SIZE: "50000"
+      RAW_ASSET_SNAPSHOT_INTERVAL: "1000"
+      RAW_PIPELINE_ID: raw-live
+    networks:
+      - neckwork
+    logging:
+      driver: json-file
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == Ubuntu-2204-jammy-amd64-base
+      restart_policy:
+        condition: any
+      resources:
+        limits:
+          cpus: "4"
+          memory: 8G
+
+  # Drives this node's Docker engine to create and reap historical workers. The
+  # mounted socket is node-local, which is the reason the whole stack is pinned:
+  # a task rescheduled elsewhere would manage the wrong engine.
+  ingestion-supervisor:
+    image: galacticcouncil/hydration-neckwork-supervisor:latest
+    environment:
+      COMPOSE_PROJECT_NAME: hydration-neckwork
+      ROOT_DIR: /etc/hydration-neckwork
+      CLICKHOUSE_DATABASE: price_data
+      CLICKHOUSE_HOST: http://clickhouse:8123
+      CLICKHOUSE_PASSWORD: change-me-before-first-deploy
+      SQD_GATEWAY: https://v2.archive.subsquid.io/network/hydradx
+      SQD_GATEWAY_API_KEY: ""
+      RAW_RPC_URL: https://rpc.coke.hydration.cloud
+      RAW_EVM_RPC_URL: https://rpc.coke.hydration.cloud
+      RAW_EVM_RPC_FALLBACK_URLS: https://rpc.sin.hydration.cloud,https://rpc.coke.hydration.cloud,https://hydration.rotko.net,https://hydration-rpc.neckwork.net
+      RAW_WORKERS: "6"
+      RAW_FAILED_RETRY_LIMIT: "3"
+      RAW_BLOCKED_RETRY_AFTER_SECONDS: "21600"
+      RANGE_SIZE: "1000"
+      MAIN_MAX_RANGES: "3"
+      MAIN_WORKERS: "3"
+      POLL_SECONDS: "60"
+      RAW_RATE_LIMIT: "50"
+      RAW_CAPACITY: "10"
+      RAW_BALANCE_READ_CONCURRENCY: "20"
+      RAW_BALANCE_READ_BATCH_SIZE: "250"
+      RAW_BALANCE_READ_BATCH_CONCURRENCY: "4"
+      RAW_SNAPSHOT_READ_BATCH_SIZE: "100"
+      RAW_SNAPSHOT_READ_BATCH_CONCURRENCY: "2"
+      RAW_MONEY_MARKET_POSITION_CONCURRENCY: "8"
+      RAW_MONEY_MARKET_BATCH_SIZE: "50"
+      MAIN_RPC_URL: https://hydration-rpc.neckwork.net
+      MAIN_RATE_LIMIT: "40"
+      MAIN_CAPACITY: "8"
+      LIVE_MAIN_ENABLED: "true"
+      LIVE_MAIN_NAME: hydration-neckwork-main-live
+      LIVE_MAIN_PIPELINE_ID: main-live
+      LIVE_MAIN_RPC_URL: https://hydration-rpc.neckwork.net
+      LIVE_MAIN_RATE_LIMIT: "100"
+      LIVE_MAIN_CAPACITY: "20"
+      LIVE_MAIN_BATCH_SIZE: "50000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Worker service definitions, image-only so `docker compose run` never
+      # tries to build inside the supervisor.
+      - /opt/hydration-neckwork/ops/swarm/workers.compose.yml:/etc/hydration-neckwork/docker-compose.yml:ro
+    networks:
+      - neckwork
+    logging:
+      driver: json-file
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == Ubuntu-2204-jammy-amd64-base
+      restart_policy:
+        condition: any
+
+  identity-snapshot:
+    image: galacticcouncil/hydration-neckwork-indexer:latest
+    command: ["src/scripts/snapshot-identities.ts", "--loop", "--refresh-hours=1"]
+    environment:
+      RPC_URL: https://hydration-rpc.neckwork.net
+      CLICKHOUSE_HOST: http://clickhouse:8123
+      CLICKHOUSE_PASSWORD: change-me-before-first-deploy
+      RPC_RATE_LIMIT: "20"
+      RPC_CAPACITY: "5"
+    networks:
+      - neckwork
+    logging:
+      driver: json-file
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == Ubuntu-2204-jammy-amd64-base
+      restart_policy:
+        condition: any
+      resources:
+        limits:
+          cpus: "2"
+          memory: 4G
+
+  # Nightly export of the user_* tables, the only ClickHouse state not
+  # reproducible from raw chain data.
+  user-backup:
+    image: galacticcouncil/hydration-neckwork-clickhouse:latest
+    entrypoint: ["/bin/sh", "/backup-user-tables.sh"]
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PASSWORD: change-me-before-first-deploy
+    volumes:
+      - /opt/hydration-neckwork/ops/backup-user-tables.sh:/backup-user-tables.sh:ro
+      - user_backups:/backups
+    networks:
+      - neckwork
+    logging:
+      driver: json-file
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == Ubuntu-2204-jammy-amd64-base
+      restart_policy:
+        condition: any
+
+  referendum-proposals:
+    image: galacticcouncil/hydration-neckwork-indexer:latest
+    command: ["src/scripts/decode-referendum-proposals.ts", "--loop", "--cycle-minutes=30", "--max=200"]
+    environment:
+      RPC_URL: https://hydration-rpc.neckwork.net
+      CLICKHOUSE_HOST: http://clickhouse:8123
+      CLICKHOUSE_PASSWORD: change-me-before-first-deploy
+      RPC_RATE_LIMIT: "20"
+      RPC_CAPACITY: "4"
+    networks:
+      - neckwork
+    logging:
+      driver: json-file
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == Ubuntu-2204-jammy-amd64-base
+      restart_policy:
+        condition: any
+      resources:
+        limits:
+          cpus: "2"
+          memory: 4G
+
+  referendum-titles:
+    image: galacticcouncil/hydration-neckwork-indexer:latest
+    command: ["src/scripts/snapshot-referendum-titles.ts", "--loop", "--cycle-minutes=15", "--live-refresh-minutes=30", "--max-fetches=40", "--delay-ms=1500"]
+    environment:
+      CLICKHOUSE_HOST: http://clickhouse:8123
+      CLICKHOUSE_PASSWORD: change-me-before-first-deploy
+      SUBSQUARE_BASE_URL: https://hydration.subsquare.io
+    networks:
+      - neckwork
+    logging:
+      driver: json-file
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == Ubuntu-2204-jammy-amd64-base
+      restart_policy:
+        condition: any
+      resources:
+        limits:
+          cpus: "1"
+          memory: 2G
+
+  balance-snapshot:
+    image: galacticcouncil/hydration-neckwork-indexer:latest
+    command: ["src/scripts/snapshot-balances.ts", "--loop", "--refresh-hours=24"]
+    environment:
+      RPC_URL: https://hydration-rpc.neckwork.net
+      CLICKHOUSE_HOST: http://clickhouse:8123
+      CLICKHOUSE_PASSWORD: change-me-before-first-deploy
+      RPC_RATE_LIMIT: "20"
+      RPC_CAPACITY: "5"
+    networks:
+      - neckwork
+    logging:
+      driver: json-file
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == Ubuntu-2204-jammy-amd64-base
+      restart_policy:
+        condition: any
+      resources:
+        limits:
+          cpus: "2"
+          memory: 4G
+
+  mm-snapshot:
+    image: galacticcouncil/hydration-neckwork-indexer:latest
+    command: ["src/scripts/snapshot-money-market.ts", "--market=core", "--loop", "--refresh-hours=6"]
+    environment:
+      RPC_URL: https://hydration-rpc.neckwork.net
+      RAW_EVM_RPC_URL: https://hydration-rpc.neckwork.net
+      RAW_EVM_RPC_FALLBACK_URLS: https://rpc.sin.hydration.cloud,https://rpc.coke.hydration.cloud,https://hydration.rotko.net,https://hydration-rpc.neckwork.net
+      CLICKHOUSE_HOST: http://clickhouse:8123
+      CLICKHOUSE_PASSWORD: change-me-before-first-deploy
+      RPC_RATE_LIMIT: "20"
+      RPC_CAPACITY: "5"
+      RAW_MONEY_MARKET_POSITION_CONCURRENCY: "8"
+      RAW_MONEY_MARKET_BATCH_SIZE: "50"
+      RAW_MONEY_MARKET_ETH_CALL_TIMEOUT_MS: "20000"
+    networks:
+      - neckwork
+    logging:
+      driver: json-file
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == Ubuntu-2204-jammy-amd64-base
+      restart_policy:
+        condition: any
+      resources:
+        limits:
+          cpus: "2"
+          memory: 4G
+
+  mm-supplemental-snapshot:
+    image: galacticcouncil/hydration-neckwork-indexer:latest
+    command: ["src/scripts/snapshot-money-market.ts", "--market=gigahdx", "--loop", "--refresh-minutes=15"]
+    environment:
+      RPC_URL: https://hydration-rpc.neckwork.net
+      RAW_EVM_RPC_URL: https://hydration-rpc.neckwork.net
+      RAW_EVM_RPC_FALLBACK_URLS: https://rpc.sin.hydration.cloud,https://rpc.coke.hydration.cloud,https://hydration.rotko.net,https://hydration-rpc.neckwork.net
+      CLICKHOUSE_HOST: http://clickhouse:8123
+      CLICKHOUSE_PASSWORD: change-me-before-first-deploy
+      RAW_MONEY_MARKET_POSITION_CONCURRENCY: "8"
+      RAW_MONEY_MARKET_BATCH_SIZE: "50"
+      RAW_MONEY_MARKET_ETH_CALL_TIMEOUT_MS: "20000"
+    networks:
+      - neckwork
+    logging:
+      driver: json-file
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == Ubuntu-2204-jammy-amd64-base
+      restart_policy:
+        condition: any
+      resources:
+        limits:
+          cpus: "2"
+          memory: 4G
+
+  atoken-anchor:
+    image: galacticcouncil/hydration-neckwork-indexer:latest
+    command: ["src/scripts/snapshot-atoken-anchors.ts", "--loop", "--refresh-hours=6"]
+    environment:
+      RPC_URL: https://hydration-rpc.neckwork.net
+      RAW_ATOKEN_ANCHOR_RPC_URL: https://hydration-rpc.neckwork.net
+      CLICKHOUSE_HOST: http://clickhouse:8123
+      CLICKHOUSE_PASSWORD: change-me-before-first-deploy
+    networks:
+      - neckwork
+    logging:
+      driver: json-file
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == Ubuntu-2204-jammy-amd64-base
+      restart_policy:
+        condition: any
+      resources:
+        limits:
+          cpus: "1"
+          memory: 2G
+
+  api:
+    image: galacticcouncil/hydration-neckwork-api:latest
+    environment:
+      CLICKHOUSE_HOST: http://clickhouse:8123
+      CLICKHOUSE_PASSWORD: change-me-before-first-deploy
+      RAW_EVM_RPC_URL: https://hydration-rpc.neckwork.net
+      EXPLORER_OCELLOIDS_URL: https://api.ocelloids.net
+      EXPLORER_OCELLOIDS_TOKEN: ""
+    networks:
+      - neckwork
+      - gateway
+    logging:
+      driver: json-file
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == Ubuntu-2204-jammy-amd64-base
+      restart_policy:
+        condition: any
+      resources:
+        limits:
+          cpus: "8"
+          memory: 16G
+      labels:
+        traefik.enable: "true"
+        traefik.docker.network: gateway
+        traefik.http.routers.neckwork-api.rule: Host(`neckwork-api.shellfish.hydration.cloud`)
+        traefik.http.routers.neckwork-api.entrypoints: websecure
+        traefik.http.routers.neckwork-api.tls: "true"
+        traefik.http.routers.neckwork-api.tls.certresolver: myresolver
+        traefik.http.services.neckwork-api.loadbalancer.server.port: "3000"
+
+  # Recompute loop for the derivation jobs that a materialized view cannot
+  # express. Same image and environment as `api`, different entrypoint.
+  derivations:
+    image: galacticcouncil/hydration-neckwork-api:latest
+    command: ["./node_modules/.bin/tsx", "src/derivations/runner.ts"]
+    environment:
+      CLICKHOUSE_HOST: http://clickhouse:8123
+      CLICKHOUSE_PASSWORD: change-me-before-first-deploy
+      RAW_EVM_RPC_URL: https://hydration-rpc.neckwork.net
+      EXPLORER_OCELLOIDS_URL: https://api.ocelloids.net
+      EXPLORER_OCELLOIDS_TOKEN: ""
+    networks:
+      - neckwork
+    logging:
+      driver: json-file
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == Ubuntu-2204-jammy-amd64-base
+      restart_policy:
+        condition: any
+      resources:
+        limits:
+          cpus: "4"
+          memory: 8G
+
+  # The UIs bake their sibling's public URL into the bundle at build time, so
+  # changing a hostname means rebuilding and repushing the image, not editing
+  # this file. See ops/swarm/build-and-push.sh.
+  preis-ui:
+    image: galacticcouncil/hydration-neckwork-preis-ui:latest
+    networks:
+      - neckwork
+      - gateway
+    logging:
+      driver: json-file
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == Ubuntu-2204-jammy-amd64-base
+      restart_policy:
+        condition: any
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
+      labels:
+        traefik.enable: "true"
+        traefik.docker.network: gateway
+        traefik.http.routers.neckwork-preis.rule: Host(`neckwork-preis.shellfish.hydration.cloud`)
+        traefik.http.routers.neckwork-preis.entrypoints: websecure
+        traefik.http.routers.neckwork-preis.tls: "true"
+        traefik.http.routers.neckwork-preis.tls.certresolver: myresolver
+        traefik.http.services.neckwork-preis.loadbalancer.server.port: "80"
+
+  explorer-ui:
+    image: galacticcouncil/hydration-neckwork-explorer-ui:latest
+    networks:
+      - neckwork
+      - gateway
+    logging:
+      driver: json-file
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == Ubuntu-2204-jammy-amd64-base
+      restart_policy:
+        condition: any
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
+      labels:
+        traefik.enable: "true"
+        traefik.docker.network: gateway
+        traefik.http.routers.neckwork-explorer.rule: Host(`neckwork-explorer.shellfish.hydration.cloud`)
+        traefik.http.routers.neckwork-explorer.entrypoints: websecure
+        traefik.http.routers.neckwork-explorer.tls: "true"
+        traefik.http.routers.neckwork-explorer.tls.certresolver: myresolver
+        traefik.http.services.neckwork-explorer.loadbalancer.server.port: "80"
+
+volumes:
+  clickhouse_data:
+    external: true
+    name: hydration-neckwork-clickhouse-data
+  user_backups:
+    external: true
+    name: hydration-neckwork-user-backups
+
+networks:
+  # Attachable so the supervisor's `docker compose run` workers, which are plain
+  # containers rather than Swarm tasks, can still reach ClickHouse. Declared
+  # external and precreated so the name never depends on the stack name.
+  neckwork:
+    external: true
+    name: hydration-neckwork-net
+  gateway:
+    external: true

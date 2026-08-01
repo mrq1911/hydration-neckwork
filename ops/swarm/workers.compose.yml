@@ -1,0 +1,64 @@
+# Worker templates for ingestion-supervisor under Swarm.
+#
+# The supervisor creates historical workers with `docker compose run --no-deps`
+# against the node's Docker engine, so it needs a Compose file that defines
+# `indexer` and `raw-indexer`. This is that file, mounted over the copy baked
+# into the supervisor image.
+#
+# It differs from the repository's docker-compose.yml in two ways that matter:
+# no `build:` keys, because the supervisor cannot build inside its own container,
+# and an external network, because the workers are plain containers that have to
+# join the Swarm overlay to reach ClickHouse.
+#
+# The supervisor overrides the per-range settings (pipeline id, block range, RPC
+# endpoint, rate limits, batch size) with `-e` at run time. Only the values that
+# are identical for every worker belong here.
+
+services:
+  indexer:
+    image: galacticcouncil/hydration-neckwork-indexer:latest
+    environment:
+      - RPC_URL=${MAIN_RPC_URL:-https://hydration-rpc.neckwork.net}
+      - SQD_GATEWAY=${SQD_GATEWAY:-https://v2.archive.subsquid.io/network/hydradx}
+      - SQD_GATEWAY_API_KEY=${SQD_GATEWAY_API_KEY:-}
+      - CLICKHOUSE_HOST=${CLICKHOUSE_HOST:-http://clickhouse:8123}
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:-dev}
+      - RPC_RATE_LIMIT=${MAIN_RATE_LIMIT:-40}
+      - RPC_CAPACITY=${MAIN_CAPACITY:-8}
+      - BATCH_SIZE=${INDEXER_BATCH_SIZE:-10000}
+    networks:
+      - neckwork
+
+  raw-indexer:
+    image: galacticcouncil/hydration-neckwork-indexer:latest
+    command: ["src/raw/cli.ts"]
+    environment:
+      - RPC_URL=${RAW_RPC_URL:-https://rpc.coke.hydration.cloud}
+      - SQD_GATEWAY=${SQD_GATEWAY:-https://v2.archive.subsquid.io/network/hydradx}
+      - SQD_GATEWAY_API_KEY=${SQD_GATEWAY_API_KEY:-}
+      - RAW_EVM_RPC_URL=${RAW_EVM_RPC_URL:-https://rpc.coke.hydration.cloud}
+      - RAW_EVM_RPC_FALLBACK_URLS=${RAW_EVM_RPC_FALLBACK_URLS:-https://rpc.sin.hydration.cloud,https://rpc.coke.hydration.cloud,https://hydration.rotko.net,https://hydration-rpc.neckwork.net}
+      - CLICKHOUSE_HOST=${CLICKHOUSE_HOST:-http://clickhouse:8123}
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:-dev}
+      - RPC_RATE_LIMIT=${RAW_RATE_LIMIT:-50}
+      - RPC_CAPACITY=${RAW_CAPACITY:-10}
+      - RAW_BALANCE_READ_CONCURRENCY=${RAW_BALANCE_READ_CONCURRENCY:-20}
+      - RAW_BALANCE_READ_BATCH_ENABLED=${RAW_BALANCE_READ_BATCH_ENABLED:-true}
+      - RAW_BALANCE_READ_BATCH_SIZE=${RAW_BALANCE_READ_BATCH_SIZE:-250}
+      - RAW_BALANCE_READ_BATCH_CONCURRENCY=${RAW_BALANCE_READ_BATCH_CONCURRENCY:-4}
+      - RAW_SNAPSHOT_READ_BATCH_SIZE=${RAW_SNAPSHOT_READ_BATCH_SIZE:-100}
+      - RAW_SNAPSHOT_READ_BATCH_CONCURRENCY=${RAW_SNAPSHOT_READ_BATCH_CONCURRENCY:-2}
+      - RAW_MONEY_MARKET_ETH_CALL_TIMEOUT_MS=${RAW_MONEY_MARKET_ETH_CALL_TIMEOUT_MS:-20000}
+      - RAW_MONEY_MARKET_POSITION_CONCURRENCY=${RAW_MONEY_MARKET_POSITION_CONCURRENCY:-8}
+      - RAW_MONEY_MARKET_BATCH_SIZE=${RAW_MONEY_MARKET_BATCH_SIZE:-50}
+      - RAW_MM_PERIODIC_SNAPSHOT_ENABLED=${RAW_MM_PERIODIC_SNAPSHOT_ENABLED:-true}
+      - RAW_MM_SNAPSHOT_INTERVAL_BLOCKS=${RAW_MM_SNAPSHOT_INTERVAL_BLOCKS:-7200}
+      - BATCH_SIZE=${RAW_BATCH_SIZE:-50000}
+      - RAW_ASSET_SNAPSHOT_INTERVAL=${RAW_ASSET_SNAPSHOT_INTERVAL:-1000}
+    networks:
+      - neckwork
+
+networks:
+  neckwork:
+    external: true
+    name: hydration-neckwork-net
