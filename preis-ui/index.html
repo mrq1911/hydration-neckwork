@@ -32,6 +32,10 @@
     <meta name="twitter:description" content="Real-time price charts for Hydration assets" />
     <meta name="twitter:image" content="/og-image.png" />
     <title>preis</title>
+    <!-- Runtime configuration, rewritten per container from EXPLORER_URL. A classic
+         script in <head> runs before the deferred module bundle, so
+         window.__NECKWORK_CONFIG__ is set whichever chunk reads it first. -->
+    <script src="/config.js"></script>
   </head>
   <body>
     <div id="root"></div>

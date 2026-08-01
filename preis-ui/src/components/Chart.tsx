@@ -24,10 +24,10 @@ import { keepTabFocusInside } from '../utils/focus'
 import { ToolController } from '../chart-tools/ToolController'
 import type { ToolState } from '../chart-tools/ToolController'
 import ChartToolbar from './ChartToolbar'
+import { EXPLORER_URL } from '../runtimeConfig'
 
 // Account pills link into the sibling explorer app (mirrors the explorer's
-// VITE_PREIS_URL wiring). Build-time env; falls back to the local docker UI.
-const EXPLORER_URL = (import.meta.env.VITE_EXPLORER_URL as string | undefined) || 'http://localhost:5174'
+// PREIS_URL wiring).
 function explorerAccountUrl(address: string): string {
   return `${EXPLORER_URL.replace(/\/+$/, '')}/account/${encodeURIComponent(address)}`
 }

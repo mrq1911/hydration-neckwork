@@ -84,11 +84,11 @@ Docker Compose provides working defaults. Override them in an untracked `.env` f
 | `RANGE_SIZE` | `1000` | Blocks per raw historical range |
 | `MAIN_WORKERS` | `3` | Concurrent historical price workers |
 | `MAIN_MAX_RANGES` | `3` | Raw ranges consumed per price batch |
-| `VITE_EXPLORER_URL` | local fallback | Public Explorer URL embedded in Preis UI |
-| `VITE_PREIS_URL` | local fallback | Public Preis URL embedded in Explorer UI |
+| `EXPLORER_URL` | local fallback | Public Explorer URL the Preis UI links to |
+| `PREIS_URL` | local fallback | Public Preis URL the Explorer UI links to |
 | `EXPLORER_OCELLOIDS_TOKEN` | unset | Enables optional XCM journey enrichment |
 
-See [`docker-compose.yml`](docker-compose.yml) for service-specific tuning variables. Keep credentials in `.env`, never in tracked files. Vite URL changes require rebuilding the corresponding UI image.
+See [`docker-compose.yml`](docker-compose.yml) for service-specific tuning variables. Keep credentials in `.env`, never in tracked files. The two cross-link URLs are read at container start and written into `/config.js`, so changing one needs a restart rather than a UI rebuild.
 
 ### Host-specific Compose overrides
 

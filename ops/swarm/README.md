@@ -67,9 +67,9 @@ It will not converge until all of them exist.
    ./ops/swarm/build-and-push.sh
    ```
 
-   Override `REGISTRY`, `TAG`, `VITE_EXPLORER_URL`, or `VITE_PREIS_URL` as needed.
-   The UI images bake their sibling's public URL in at build time, so changing a
-   hostname means rebuilding, not editing the stack file.
+   Override `REGISTRY` or `TAG` as needed. The images carry no
+   deployment-specific values: the UIs read their sibling's URL from `/config.js`
+   at container start, so the same image works for any hostname.
 
 2. **Network.** Attachable, so the supervisor's plain-container workers can join
    the same overlay as the Swarm services:
@@ -150,9 +150,23 @@ Traefik picks the UIs and API up from `deploy.labels` on the `gateway` network:
 | Preis | `neckwork-preis.shellfish.hydration.cloud` |
 | API | `neckwork-api.shellfish.hydration.cloud` |
 
-Serving these under `neckwork.net` instead is a DNS change plus a UI rebuild, since
-the certresolver and entrypoints here match what the cluster's Traefik already
-runs.
+Serving these under `neckwork.net` instead is a DNS change plus editing the two
+hostnames in this stack file; the certresolver and entrypoints already match what
+the cluster's Traefik runs.
+
+The UIs cross-link using `PREIS_URL` on `explorer-ui` and `EXPLORER_URL` on
+`preis-ui`. Both are read at container start and written into `/config.js`, so a
+hostname change is a stack update and a restart, not an image rebuild:
+
+```
+stack env ──▶ docker-entrypoint.d/40-runtime-config.sh
+                └─▶ /config.js  (window.__NECKWORK_CONFIG__)
+                      └─▶ app, falling back to the build-time
+                          value and then to localhost
+```
+
+`/config.js` is served `no-store`, so a redeployed container never keeps handing
+out the previous deployment's URL.
 
 ## Operational notes
 

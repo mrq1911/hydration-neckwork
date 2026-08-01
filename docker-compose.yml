@@ -451,15 +451,15 @@ services:
     build:
       context: ./preis-ui
       dockerfile: Dockerfile
-      args:
-        # Public URL of the Explorer UI, baked into the bundle at build time
-        # (Vite). Set VITE_EXPLORER_URL in .env, then rebuild preis-ui.
-        VITE_EXPLORER_URL: ${VITE_EXPLORER_URL:-}
     container_name: hydration-neckwork-preis-ui
     depends_on:
       - api
     ports:
       - "5173:80"
+    environment:
+      # Public URL of the Explorer UI, written into /config.js at container start.
+      # A runtime value, so changing it needs a restart rather than a rebuild.
+      - EXPLORER_URL=${EXPLORER_URL:-}
     networks:
       - neckwork
 
@@ -467,15 +467,15 @@ services:
     build:
       context: ./explorer-ui
       dockerfile: Dockerfile
-      args:
-        # Public URL of the Preis price-chart UI, baked into the bundle at build time
-        # (Vite). Set VITE_PREIS_URL in .env, then rebuild explorer-ui.
-        VITE_PREIS_URL: ${VITE_PREIS_URL:-}
     container_name: hydration-neckwork-explorer-ui
     depends_on:
       - api
     ports:
       - "5174:80"
+    environment:
+      # Public URL of the Preis price-chart UI, written into /config.js at container
+      # start. A runtime value, so changing it needs a restart rather than a rebuild.
+      - PREIS_URL=${PREIS_URL:-}
     networks:
       - neckwork
 

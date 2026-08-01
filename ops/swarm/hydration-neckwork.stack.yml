@@ -440,11 +440,13 @@ services:
           cpus: "4"
           memory: 8G
 
-  # The UIs bake their sibling's public URL into the bundle at build time, so
-  # changing a hostname means rebuilding and repushing the image, not editing
-  # this file. See ops/swarm/build-and-push.sh.
+  # Each UI links to its sibling using a URL read from /config.js, which the
+  # container writes from the env var below on startup. Changing a hostname is a
+  # stack update, not an image rebuild.
   preis-ui:
     image: galacticcouncil/hydration-neckwork-preis-ui:latest
+    environment:
+      EXPLORER_URL: https://neckwork-explorer.shellfish.hydration.cloud
     networks:
       - neckwork
       - gateway
@@ -472,6 +474,8 @@ services:
 
   explorer-ui:
     image: galacticcouncil/hydration-neckwork-explorer-ui:latest
+    environment:
+      PREIS_URL: https://neckwork-preis.shellfish.hydration.cloud
     networks:
       - neckwork
       - gateway
