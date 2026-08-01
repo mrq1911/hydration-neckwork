@@ -1,14 +1,24 @@
 # Swarm deployment
 
 Hydration Neckwork is designed around Docker Compose. `hydration-neckwork.stack.yml`
-runs it as a Swarm stack instead, pinned to a single node, which is the only
-arrangement that preserves the two assumptions the pipeline makes: ClickHouse
-keeps its data in a node-local volume, and `ingestion-supervisor` manages
-historical workers through that node's own Docker engine.
+runs it as a Swarm stack instead.
 
-Nothing here makes the stack node-portable. Pinning is the design, not a
-limitation to be relaxed later — a task rescheduled onto another node would find
-an empty database and a foreign Docker socket.
+The stack assumes a **single-node swarm** and carries no placement constraints,
+because on one node they only add noise. The assumption is real all the same:
+ClickHouse keeps its data in a node-local volume, and `ingestion-supervisor`
+manages historical workers through its own node's Docker engine. Neither survives
+being rescheduled — ClickHouse would come up against an empty volume and the
+supervisor would drive the wrong engine.
+
+So if a second node ever joins this swarm, add constraints back before scaling or
+redeploying anything:
+
+```yaml
+deploy:
+  placement:
+    constraints:
+      - node.hostname == <the node holding the data>
+```
 
 ## What Swarm changes
 
@@ -24,7 +34,7 @@ docker-compose.yml                    hydration-neckwork.stack.yml
 ├─ depends_on: condition: … ────────▶ dropped; restart policies converge instead
 ├─ driver: bridge ──────────────────▶ stack-managed attachable overlay
 ├─ ports: 127.0.0.1:… ──────────────▶ traefik labels under deploy.labels
-└─ (no deploy: blocks) ─────────────▶ placement, resources, restart_policy
+└─ (no deploy: blocks) ─────────────▶ resources, restart_policy
 ```
 
 Source changes were needed as well, all of which keep working under plain Compose:
@@ -109,9 +119,9 @@ docker stack deploy -c ops/swarm/hydration-neckwork.stack.yml neckwork
    either in the editor or in the file. Deploying with the placeholder means
    redoing the ClickHouse volume later — the entrypoint only applies
    `CLICKHOUSE_PASSWORD` when initializing an empty one.
-4. **Deploy.** The prerequisites above must already exist; Swarmpit does not
-   create external networks or volumes for you, and a missing one fails the whole
-   deploy rather than a single service.
+4. **Deploy.** The stack creates its own network and volumes. The only thing that
+   must already exist is the `gateway` network, which Traefik owns, and the six
+   images in the registry.
 5. **Expect a noisy first few minutes** — see Convergence below. `schema-bootstrap`
    ending at 0/1 is success, not failure.
 

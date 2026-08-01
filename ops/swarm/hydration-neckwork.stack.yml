@@ -1,14 +1,18 @@
-# Docker Swarm stack for Hydration Neckwork, pinned to a single node.
+# Docker Swarm stack for Hydration Neckwork.
 #
 # This is not a drop-in translation of docker-compose.yml. Swarm cannot build
 # images, ignores `depends_on`, and does not support `container_name` or
-# `profiles`, so this file carries prebuilt images, explicit placement, and
-# restart policies instead. See ops/swarm/README.md for the prerequisites; the
-# stack will not converge without them.
+# `profiles`, so this file carries prebuilt images, resource limits, and restart
+# policies instead. See ops/swarm/README.md for the prerequisites; the stack will
+# not converge without them.
 #
-# Every service is pinned to one node because ClickHouse stores its data in a
-# local volume and `ingestion-supervisor` drives that node's Docker engine
-# directly. Moving a task to another node would hand it an empty database.
+# This stack assumes a single-node swarm. ClickHouse keeps its data in a
+# node-local volume and `ingestion-supervisor` drives its own node's Docker
+# engine, so neither survives being rescheduled elsewhere: ClickHouse would come
+# up against an empty volume, and the supervisor would manage the wrong engine.
+# There are deliberately no placement constraints, which means adding a second
+# node to the swarm requires adding them back before anything is scaled or
+# redeployed.
 #
 # The `indexer` and `raw-indexer` services from docker-compose.yml are absent on
 # purpose. They are templates the supervisor instantiates as plain containers
@@ -36,9 +40,6 @@ services:
       driver: json-file
     deploy:
       replicas: 1
-      placement:
-        constraints:
-          - node.hostname == Ubuntu-2204-jammy-amd64-base
       restart_policy:
         condition: any
       resources:
@@ -67,9 +68,6 @@ services:
       driver: json-file
     deploy:
       replicas: 1
-      placement:
-        constraints:
-          - node.hostname == Ubuntu-2204-jammy-amd64-base
       restart_policy:
         condition: on-failure
         delay: 15s
@@ -107,9 +105,6 @@ services:
       driver: json-file
     deploy:
       replicas: 1
-      placement:
-        constraints:
-          - node.hostname == Ubuntu-2204-jammy-amd64-base
       restart_policy:
         condition: any
       resources:
@@ -117,9 +112,9 @@ services:
           cpus: "4"
           memory: 8G
 
-  # Drives this node's Docker engine to create and reap historical workers. The
-  # mounted socket is node-local, which is the reason the whole stack is pinned:
-  # a task rescheduled elsewhere would manage the wrong engine.
+  # Drives its own node's Docker engine to create and reap historical workers. The
+  # mounted socket is node-local, so this service cannot move between nodes; see
+  # the single-node note at the top of this file.
   ingestion-supervisor:
     image: galacticcouncil/hydration-neckwork-supervisor:latest
     environment:
@@ -160,9 +155,9 @@ services:
       LIVE_MAIN_CAPACITY: "20"
       LIVE_MAIN_BATCH_SIZE: "50000"
     volumes:
-      # Node-local by necessity: this is how the supervisor creates workers, and
-      # the reason the whole stack is pinned to one node. The worker definitions
-      # themselves are baked into the image (ops/supervisor.Dockerfile).
+      # Node-local by necessity: this is how the supervisor creates workers. The
+      # worker definitions themselves are baked into the image
+      # (ops/supervisor.Dockerfile).
       - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - net
@@ -170,9 +165,6 @@ services:
       driver: json-file
     deploy:
       replicas: 1
-      placement:
-        constraints:
-          - node.hostname == Ubuntu-2204-jammy-amd64-base
       restart_policy:
         condition: any
 
@@ -191,9 +183,6 @@ services:
       driver: json-file
     deploy:
       replicas: 1
-      placement:
-        constraints:
-          - node.hostname == Ubuntu-2204-jammy-amd64-base
       restart_policy:
         condition: any
       resources:
@@ -218,9 +207,6 @@ services:
       driver: json-file
     deploy:
       replicas: 1
-      placement:
-        constraints:
-          - node.hostname == Ubuntu-2204-jammy-amd64-base
       restart_policy:
         condition: any
 
@@ -239,9 +225,6 @@ services:
       driver: json-file
     deploy:
       replicas: 1
-      placement:
-        constraints:
-          - node.hostname == Ubuntu-2204-jammy-amd64-base
       restart_policy:
         condition: any
       resources:
@@ -262,9 +245,6 @@ services:
       driver: json-file
     deploy:
       replicas: 1
-      placement:
-        constraints:
-          - node.hostname == Ubuntu-2204-jammy-amd64-base
       restart_policy:
         condition: any
       resources:
@@ -287,9 +267,6 @@ services:
       driver: json-file
     deploy:
       replicas: 1
-      placement:
-        constraints:
-          - node.hostname == Ubuntu-2204-jammy-amd64-base
       restart_policy:
         condition: any
       resources:
@@ -317,9 +294,6 @@ services:
       driver: json-file
     deploy:
       replicas: 1
-      placement:
-        constraints:
-          - node.hostname == Ubuntu-2204-jammy-amd64-base
       restart_policy:
         condition: any
       resources:
@@ -345,9 +319,6 @@ services:
       driver: json-file
     deploy:
       replicas: 1
-      placement:
-        constraints:
-          - node.hostname == Ubuntu-2204-jammy-amd64-base
       restart_policy:
         condition: any
       resources:
@@ -369,9 +340,6 @@ services:
       driver: json-file
     deploy:
       replicas: 1
-      placement:
-        constraints:
-          - node.hostname == Ubuntu-2204-jammy-amd64-base
       restart_policy:
         condition: any
       resources:
@@ -394,9 +362,6 @@ services:
       driver: json-file
     deploy:
       replicas: 1
-      placement:
-        constraints:
-          - node.hostname == Ubuntu-2204-jammy-amd64-base
       restart_policy:
         condition: any
       resources:
@@ -429,9 +394,6 @@ services:
       driver: json-file
     deploy:
       replicas: 1
-      placement:
-        constraints:
-          - node.hostname == Ubuntu-2204-jammy-amd64-base
       restart_policy:
         condition: any
       resources:
@@ -453,9 +415,6 @@ services:
       driver: json-file
     deploy:
       replicas: 1
-      placement:
-        constraints:
-          - node.hostname == Ubuntu-2204-jammy-amd64-base
       restart_policy:
         condition: any
       resources:
@@ -482,9 +441,6 @@ services:
       driver: json-file
     deploy:
       replicas: 1
-      placement:
-        constraints:
-          - node.hostname == Ubuntu-2204-jammy-amd64-base
       restart_policy:
         condition: any
       resources:
