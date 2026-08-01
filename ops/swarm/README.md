@@ -112,11 +112,40 @@ It will not converge until all of them exist.
 
 ## Deploy
 
+From the CLI, against the checkout:
+
 ```bash
 docker stack deploy -c ops/swarm/hydration-neckwork.stack.yml neckwork
 ```
 
-Or paste the file into Swarmpit as a new stack named `neckwork`.
+### Through Swarmpit
+
+1. **Stacks → New stack.** Name it `neckwork`. The name becomes the Swarm
+   namespace, so services appear as `neckwork_api`, `neckwork_clickhouse`, and so
+   on. Traefik router names are set explicitly in the labels and do not depend on
+   it.
+2. **Paste the whole stack file** into the editor. Nothing is templated: every
+   value is inlined because Swarmpit deploys the YAML it is given and does not
+   read a `.env` beside it. `${VAR}` left in the file would reach Swarm as an
+   empty string, not as a default.
+3. **Replace the ClickHouse password** in all 14 places before the first deploy,
+   either in the editor or in the file. Deploying with the placeholder means
+   redoing the ClickHouse volume later — the entrypoint only applies
+   `CLICKHOUSE_PASSWORD` when initializing an empty one.
+4. **Deploy.** The prerequisites above must already exist; Swarmpit does not
+   create external networks or volumes for you, and a missing one fails the whole
+   deploy rather than a single service.
+5. **Expect a noisy first few minutes** — see Convergence below. `schema-bootstrap`
+   ending at 0/1 is success, not failure.
+
+Later edits go through **Stacks → neckwork → Edit**, which redeploys changed
+services only. Editing a single variable is also possible per service under
+Services → *service* → Environment, but that drifts from the stack file; prefer
+editing the stack so the file stays the source of truth.
+
+Swarmpit's own compose view normalizes what it shows: expect `deploy.labels` to be
+rendered as a flat label list and short syntax expanded to long. That is display
+and storage formatting, not a change in meaning.
 
 ## Convergence
 
@@ -140,19 +169,59 @@ deploy; they stop once the schema lands.
 They appear under `docker ps` on the node but not in Swarmpit's service list,
 because they are not Swarm tasks. Do not start or stop them by hand.
 
-## Routing
+## Routing through Traefik
 
-Traefik picks the UIs and API up from `deploy.labels` on the `gateway` network:
+Three services are published; everything else, ClickHouse included, stays on the
+internal overlay with no host ports.
 
-| Service | Host |
-| --- | --- |
-| Explorer | `neckwork-explorer.shellfish.hydration.cloud` |
-| Preis | `neckwork-preis.shellfish.hydration.cloud` |
-| API | `neckwork-api.shellfish.hydration.cloud` |
+| Service | Host | Container port |
+| --- | --- | --- |
+| Explorer | `neckwork-explorer.shellfish.hydration.cloud` | 80 |
+| Preis | `neckwork-preis.shellfish.hydration.cloud` | 80 |
+| API | `neckwork-api.shellfish.hydration.cloud` | 3000 |
 
-Serving these under `neckwork.net` instead is a DNS change plus editing the two
-hostnames in this stack file; the certresolver and entrypoints already match what
-the cluster's Traefik runs.
+The cluster's Traefik is v2.7 with `--providers.docker.swarmMode=true` and
+`--providers.docker.network=gateway`, entrypoints `web` (:80) and `websecure`
+(:443), a global `web → websecure` redirect, and the `myresolver` ACME resolver.
+The stack's labels are written against exactly that, so no Traefik-side change is
+needed to add these three routers.
+
+Four things about this wiring are easy to get wrong:
+
+- **Labels live under `deploy.labels`, not top-level `labels`.** In Swarm mode
+  Traefik reads *service* labels; top-level `labels` become *container* labels and
+  are silently ignored. The symptom is a healthy service that Traefik never routes
+  to — a 404 from the edge, with nothing in the service's own logs.
+- **`traefik.docker.network=gateway` is required here.** `api`, `preis-ui`, and
+  `explorer-ui` each sit on two networks (`neckwork` and `gateway`). Without the
+  label Traefik may pick the internal address and fail to reach the task.
+- **`loadbalancer.server.port` is the container port**, not a published one. These
+  services deliberately publish nothing; the routing mesh is not involved.
+- **Certificates issue on first request.** `myresolver` uses the HTTP challenge on
+  the `web` entrypoint plus a TLS challenge, and the wildcard
+  `*.shellfish.hydration.cloud` already resolves to the node, so ACME should
+  succeed unattended. The very first hit to each host can be slow while the
+  certificate is obtained.
+
+### Verifying the edge
+
+```bash
+# routers registered? (dashboard is published on host port 8081)
+curl -s http://<node>:8081/api/http/routers | grep -o 'neckwork-[a-z]*'
+
+# end to end, including certificate
+curl -sI https://neckwork-api.shellfish.hydration.cloud/health
+curl -sI https://neckwork-explorer.shellfish.hydration.cloud/
+```
+
+A 404 from Traefik with the service reporting healthy means the labels did not
+register: check they are under `deploy.labels` and that the service is attached to
+`gateway`. A 502 means they registered but Traefik cannot reach the task, which
+points at the network label or a service still crash-looping on the schema.
+
+Serving these under `neckwork.net` instead is a DNS change plus editing the
+hostnames in this stack file — three router rules and the two cross-link env vars.
+The certresolver and entrypoints stay as they are.
 
 The UIs cross-link using `PREIS_URL` on `explorer-ui` and `EXPLORER_URL` on
 `preis-ui`. Both are read at container start and written into `/config.js`, so a
