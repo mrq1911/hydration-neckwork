@@ -408,6 +408,9 @@ services:
     image: galacticcouncil/hydration-neckwork-preis-ui:latest
     environment:
       EXPLORER_URL: https://neckwork-explorer.shellfish.hydration.cloud
+      # nginx proxies /api/ here. Must be the Swarm service name: the image's
+      # default is the Compose container_name, which does not exist under Swarm.
+      API_UPSTREAM: neckwork_api:3000
     networks:
       - net
       - gateway
@@ -434,6 +437,9 @@ services:
     image: galacticcouncil/hydration-neckwork-explorer-ui:latest
     environment:
       PREIS_URL: https://neckwork-preis.shellfish.hydration.cloud
+      # nginx proxies /api/ here. Must be the Swarm service name: the image's
+      # default is the Compose container_name, which does not exist under Swarm.
+      API_UPSTREAM: neckwork_api:3000
     networks:
       - net
       - gateway
