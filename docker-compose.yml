@@ -400,6 +400,33 @@ services:
     networks:
       - neckwork
 
+  # Blockscout's own contract-verification microservice: compiles submitted
+  # standard-json and compares against the bytecode we hand it. Stateless apart
+  # from a compiler cache, and completely chain-agnostic, which is why it works
+  # for Hydration without knowing chain 222222. Internal only — the public
+  # surface is the api's Sourcify/Etherscan translation layer.
+  #
+  # Config is deserialized with deny_unknown_fields: a typo in any
+  # SMART_CONTRACT_VERIFIER__* variable PANICS at startup rather than warning.
+  smart-contract-verifier:
+    image: ghcr.io/blockscout/smart-contract-verifier:v1.10.6
+    container_name: hydration-neckwork-smart-contract-verifier
+    restart: unless-stopped
+    environment:
+      # 2 MiB default is below a real project's standard-json input.
+      - SMART_CONTRACT_VERIFIER__SERVER__HTTP__MAX_BODY_SIZE=33554432
+      # Defaults to true and pulls two extra compiler lists on startup.
+      - SMART_CONTRACT_VERIFIER__ZKSYNC_SOLIDITY__ENABLED=false
+      # sourcify.dev does not know chain 222222, so its sourcify route is useless
+      # here; we implement that protocol ourselves in the api.
+      - SMART_CONTRACT_VERIFIER__SOURCIFY__ENABLED=false
+    volumes:
+      # Named volume, not a bind mount: the container runs as uid 1001 and would
+      # fail to populate a host-owned directory.
+      - solidity_compilers:/tmp/solidity-compilers
+    networks:
+      - neckwork
+
   api:
     build:
       context: .
@@ -420,6 +447,8 @@ services:
       - RAW_EVM_RPC_URL=${RAW_EVM_RPC_URL:-https://hydration-rpc.neckwork.net}
       - EXPLORER_OCELLOIDS_URL=${EXPLORER_OCELLOIDS_URL:-https://api.ocelloids.net}
       - EXPLORER_OCELLOIDS_TOKEN=${EXPLORER_OCELLOIDS_TOKEN:-}
+      - CONTRACT_VERIFIER_URL=${CONTRACT_VERIFIER_URL:-http://smart-contract-verifier:8050}
+      - EVM_CHAIN_ID=${EVM_CHAIN_ID:-222222}
     networks:
       - neckwork
 
@@ -481,6 +510,7 @@ services:
       - neckwork
 
 volumes:
+  solidity_compilers:
   clickhouse_data:
     name: ${CLICKHOUSE_VOLUME_NAME:-hydration-neckwork-clickhouse-data}
   user_backups:
