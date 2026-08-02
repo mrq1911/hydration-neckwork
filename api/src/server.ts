@@ -19,6 +19,7 @@ import { explorerRoutes } from './routes/explorer.ts'
 import { tagRoutes } from './routes/tags.ts'
 import { userRoutes } from './routes/user.ts'
 import { listsRoutes } from './routes/lists.ts'
+import { verificationRoutes, collapseDuplicateSlashes } from './routes/verification.ts'
 import { loadExplorerAssets, stopExplorerAssetsRefresh } from './services/explorerAssets.ts'
 import { loadRuntimeErrorNames, stopRuntimeErrorNamesRefresh } from './services/runtimeErrorNames.ts'
 import {
@@ -60,6 +61,7 @@ import { initXcmJourneyService } from './services/xcmJourneyService.ts'
 import { initUserAuthService, loadUserSessions, ensureSessionDeviceColumns } from './services/userAuthService.ts'
 import { initUserProfileService, loadUserProfiles } from './services/userProfileService.ts'
 import { initUserListService, loadUserLists, ensureTagMemberPositionColumn } from './services/userListService.ts'
+import { initContractVerificationService } from './services/contractVerificationService.ts'
 
 // Trust X-Forwarded-For/X-Real-IP only from loopback/link-local/private-range
 // hops — exactly the explorer-ui nginx container on the compose network (see
@@ -73,7 +75,14 @@ import { initUserListService, loadUserLists, ensureTagMemberPositionColumn } fro
 // abuse brake and auth itself is signature-based, not IP-based. Never widen
 // this to bare `true`, which would trust XFF from any hop, including a public
 // client spoofing it directly.
-const fastify = Fastify({ logger: true, trustProxy: ['loopback', 'linklocal', 'uniquelocal'] })
+const fastify = Fastify({
+  logger: true,
+  trustProxy: ['loopback', 'linklocal', 'uniquelocal'],
+  // Verification clients can produce a doubled leading slash (`//v2/...`) purely
+  // from how they join their configured base URL; collapse it before routing so
+  // those requests reach the same handlers. See routes/verification.ts.
+  rewriteUrl: req => collapseDuplicateSlashes(req.url ?? '/'),
+})
 
 const client = createClickHouseClient()
 
@@ -149,6 +158,7 @@ await fastify.register(explorerRoutes)
 await fastify.register(tagRoutes)
 await fastify.register(userRoutes)
 await fastify.register(listsRoutes)
+await fastify.register(verificationRoutes)
 
 async function start() {
   try {
@@ -190,6 +200,7 @@ async function start() {
     initHdxService(client)
     initHollarService(client)
     initErc20WalletService(client)
+    initContractVerificationService(client)
     await initUserAuthService(client)
     initUserProfileService(client)
     initUserListService(client)

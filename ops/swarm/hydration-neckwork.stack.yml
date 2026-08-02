@@ -347,6 +347,43 @@ services:
           cpus: "1"
           memory: 2G
 
+  # Blockscout's own contract-verification microservice: compiles submitted
+  # standard-json and compares it against bytecode the api supplies. Stateless
+  # apart from a compiler cache and chain-agnostic, so it needs no knowledge of
+  # chain 222222. Internal only — no traefik labels; the public surface is the
+  # api's Sourcify translation layer.
+  #
+  # Config uses deny_unknown_fields, so a typo in any SMART_CONTRACT_VERIFIER__*
+  # variable PANICS at startup — a stray var here is a crash-loop, not a warning.
+  # Must be amd64: the arm64 image still defaults to the amd64 solc list.
+  smart-contract-verifier:
+    image: ghcr.io/blockscout/smart-contract-verifier:v1.10.6
+    environment:
+      # The 2 MiB default is below a real project's standard-json input.
+      SMART_CONTRACT_VERIFIER__SERVER__HTTP__MAX_BODY_SIZE: "33554432"
+      # Defaults to true; disabling drops two compiler-list fetches at startup.
+      SMART_CONTRACT_VERIFIER__ZKSYNC_SOLIDITY__ENABLED: "false"
+      # sourcify.dev does not know chain 222222, so this route could only ever
+      # answer unsupported_chain; the api implements that protocol itself.
+      SMART_CONTRACT_VERIFIER__SOURCIFY__ENABLED: "false"
+    volumes:
+      # Named volume, not a bind mount: the container runs as uid 1001.
+      - solidity_compilers:/tmp/solidity-compilers
+    networks:
+      - net
+    logging:
+      driver: json-file
+    deploy:
+      replicas: 1
+      # Startup is fail-fast: if the solc compiler list is unreachable the
+      # process exits 1, so it must be restarted rather than left down.
+      restart_policy:
+        condition: any
+      resources:
+        limits:
+          cpus: "8"
+          memory: 8G
+
   api:
     image: galacticcouncil/hydration-neckwork-api:latest
     environment:
@@ -355,6 +392,8 @@ services:
       RAW_EVM_RPC_URL: https://hydration-rpc.neckwork.net
       EXPLORER_OCELLOIDS_URL: https://api.ocelloids.net
       EXPLORER_OCELLOIDS_TOKEN: ""
+      CONTRACT_VERIFIER_URL: http://smart-contract-verifier:8050
+      EVM_CHAIN_ID: "222222"
     networks:
       - net
       - gateway
@@ -469,6 +508,7 @@ services:
 volumes:
   clickhouse_data:
   user_backups:
+  solidity_compilers:
 
 networks:
   # Attachable so the supervisor's `docker compose run` workers, which are plain
