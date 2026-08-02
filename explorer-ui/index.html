@@ -53,6 +53,10 @@
     <meta name="twitter:description" content="Live block explorer for the Hydration network" />
     <meta name="twitter:image" content="/og-image.png" />
     <title>Hydration Explorer</title>
+    <!-- Runtime configuration, rewritten per container from PREIS_URL. A classic
+         script in <head> runs before the deferred module bundle, so
+         window.__NECKWORK_CONFIG__ is set whichever chunk reads it first. -->
+    <script src="/config.js"></script>
   </head>
   <body>
     <div id="root"></div>

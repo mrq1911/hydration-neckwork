@@ -1,0 +1,29 @@
+# Ignore rules for `docker build -f api/Dockerfile .` from the repository root.
+# BuildKit prefers <dockerfile>.dockerignore over the context's .dockerignore,
+# which is what makes this build possible: the root .dockerignore excludes `api`.
+#
+# Everything the api image does not need is excluded here, so widening the build
+# context does not widen what gets sent to the daemon.
+.git
+.gitignore
+.env
+.env.*
+**/node_modules
+**/dist
+**/coverage
+**/test-results
+*.log
+*.md
+logs
+docs
+tests
+explorer-ui
+preis-ui
+src
+scripts
+ops
+api/tests
+clickhouse/docs
+clickhouse/Dockerfile
+typegen.json
+vitest.config.ts

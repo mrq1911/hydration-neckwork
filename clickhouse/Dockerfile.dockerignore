@@ -1,0 +1,27 @@
+# Ignore rules for `docker build -f clickhouse/Dockerfile .` from the repository
+# root. BuildKit prefers <dockerfile>.dockerignore over the context's
+# .dockerignore; this build only needs clickhouse/schema and one script in ops.
+.git
+.gitignore
+.env
+.env.*
+**/node_modules
+**/dist
+**/coverage
+**/test-results
+*.log
+*.md
+logs
+docs
+tests
+api
+explorer-ui
+preis-ui
+src
+scripts
+clickhouse/docs
+typegen.json
+vitest.config.ts
+package.json
+package-lock.json
+tsconfig.json

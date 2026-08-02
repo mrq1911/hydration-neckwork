@@ -4,6 +4,9 @@ set -euo pipefail
 ROOT_DIR="${ROOT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 CLICKHOUSE_DATABASE="${CLICKHOUSE_DATABASE:-price_data}"
 CLICKHOUSE_PASSWORD="${CLICKHOUSE_PASSWORD:-dev}"
+CLICKHOUSE_HOST="${CLICKHOUSE_HOST:-http://clickhouse:8123}"
+CLICKHOUSE_USER="${CLICKHOUSE_USER:-default}"
+CLICKHOUSE_HTTP_TIMEOUT="${CLICKHOUSE_HTTP_TIMEOUT:-60}"
 RAW_WORKERS="${RAW_WORKERS:-6}"
 RANGE_SIZE="${RANGE_SIZE:-1000}"
 MAIN_MAX_RANGES="${MAIN_MAX_RANGES:-2}"
@@ -67,11 +70,26 @@ if ! [[ "$RAW_BLOCKED_RETRY_AFTER_SECONDS" =~ ^[0-9]+$ ]]; then
   RAW_BLOCKED_RETRY_AFTER_SECONDS=21600
 fi
 
+# Reaches ClickHouse over its HTTP interface rather than `docker compose exec`,
+# so the database does not have to be a service in the supervisor's own Compose
+# project. Under Swarm it is a separate service reachable only by network name.
+# Queries already carry an explicit `FORMAT TSV`, which the HTTP interface honors
+# identically to clickhouse-client.
 ch_query() {
-  docker compose exec -T clickhouse clickhouse-client \
-    --password "$CLICKHOUSE_PASSWORD" \
-    --database "$CLICKHOUSE_DATABASE" \
-    --query "$1" </dev/null
+  local response
+  if ! response="$(curl --silent --show-error --fail-with-body \
+    --max-time "$CLICKHOUSE_HTTP_TIMEOUT" \
+    --user "$CLICKHOUSE_USER:$CLICKHOUSE_PASSWORD" \
+    --data-binary @- \
+    "$CLICKHOUSE_HOST/?database=$CLICKHOUSE_DATABASE" <<<"$1")"; then
+    printf '%s\n' "$response" >&2
+    return 1
+  fi
+  # Restores the trailing newline that command substitution strips, so callers
+  # reading line by line still see a terminated final row.
+  if [[ -n "$response" ]]; then
+    printf '%s\n' "$response"
+  fi
 }
 
 sql_escape() {

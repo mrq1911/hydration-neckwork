@@ -8,8 +8,8 @@ import { activityFilterFields } from '../components/activityFilters'
 import { PriceChart, ema7 } from '../components/PriceChart'
 import { ActivityTable } from '../components/ActivityTable'
 import { offeredPages } from '../utils/activityPaging'
+import { PREIS_URL } from '../runtimeConfig'
 
-const PREIS_URL = (import.meta.env.VITE_PREIS_URL as string | undefined) || 'http://localhost:5173'
 const PREIS_DEFAULT_QUOTE_ID = 10
 const PREIS_STABLE_FALLBACK_QUOTE: Record<number, number> = { 10: 22, 22: 10 }
 
